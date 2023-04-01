@@ -1,0 +1,288 @@
+-- check the session
+SELECT SID
+      ,SERIAL#
+      ,MACHINE
+      ,PROGRAM
+FROM   V$SESSION
+WHERE  SCHEMANAME in ('INTEGSLS','SCPOMGR');
+
+-- check SQL
+SELECT nvl(ses.username,'ORACLE PROC')||' ('||ses.sid||')' USERNAME,
+       SID,   
+       MACHINE, 
+       REPLACE(SQL.SQL_TEXT,CHR(10),'') STMT, 
+      ltrim(to_char(floor(SES.LAST_CALL_ET/3600), '09')) || ':'
+       || ltrim(to_char(floor(mod(SES.LAST_CALL_ET, 3600)/60), '09')) || ':'
+       || ltrim(to_char(mod(SES.LAST_CALL_ET, 60), '09'))    RUNT 
+  FROM V$SESSION SES,   
+       V$SQLtext_with_newlines SQL 
+ where SES.STATUS = 'ACTIVE'
+   and SES.USERNAME is not null
+   and SES.SQL_ADDRESS    = SQL.ADDRESS 
+   and SES.SQL_HASH_VALUE = SQL.HASH_VALUE 
+   and Ses.AUDSID <> userenv('SESSIONID') 
+ order by runt desc, 1,sql.piece;
+ 
+ --3. find hist SQL
+ select * from v$sqlarea
+where sql_text like '%reinitializeAllMemCubes%'
+
+ 
+ 
+ 
+ 
+--
+-- 4 get lock
+select   object_name,   object_type,   session_id,   type,   lmode,   request,   block,   ctime
+from
+  v$locked_object, all_objects, v$lock
+where
+  v$locked_object.object_id = all_objects.object_id AND
+  v$lock.id1 = all_objects.object_id AND
+  v$lock.sid = v$locked_object.session_id
+ -- and object_name in ('LEWANDOWSKIPARAM','DFU','DFUVIEW')
+order by
+  session_id, ctime desc, object_name;
+  
+
+-- find LAST stat
+
+select OWNER,TABLE_NAME,OBJECT_TYPE,NUM_ROWS,LAST_ANALYZED,GLOBAL_STATS,STATTYPE_LOCKED,STALE_STATS
+from all_tab_statistics
+where STALE_STATS='YES' and owner='SCPOMGR';
+
+
+
+select   object_name,   object_type,   session_id,   type,   lmode,   request,   block,   ctime
+from
+  v$locked_object, all_objects, v$lock
+where
+  v$locked_object.object_id = all_objects.object_id AND
+  v$lock.id1 = all_objects.object_id AND
+  v$lock.sid = v$locked_object.session_id
+  and session_id = 907
+order by
+  session_id, ctime desc, object_name;
+ 
+select count(*) from HIST_20200903;
+-- 31136587
+
+select count(*) from HIST;
+-- 31136587
+
+  -- and object_name in ('LEWANDOWSKIPARAM_20201022','DFU%','DFUVIEW%')
+ -- find SQL executing for long time.
+select S.USERNAME, s.sid, s.osuser, t.sql_id, sql_text
+from v$sqltext_with_newlines t,V$SESSION s
+where t.address =s.sql_address
+and t.hash_value = s.sql_hash_value
+and s.status = 'ACTIVE'
+and s.username <> 'SYSTEM' --and sql_id = '17nym193km6wk'
+order by s.sid,t.piece;
+
+-- kill deadlock session
+SELECT SID,SERIAL#,USERNAME,STATUS,SCHEMANAME,OSUSER,MACHINE,PROGRAM 
+FROM V$SESSION 
+WHERE SID IN (SELECT SID FROM V$LOCK) and USERNAME = 'SOM_SN_DSMBR2_UAT01' and status = 'ACTIVE';
+
+ALTER SYSTEM KILL SESSION '20629999,32289999'  IMMEDIATE ;
+
+-- Get DB paramater:
+SELECT * FROM v$parameter2 order by name;
+
+select
+ TABLESPACE_NAME 名前,
+ CONTENTS タイプ,
+ EXTENT_MANAGEMENT エクステント管理,
+ round(FSIZE/1000000) "サイズ(M)",
+ (FSIZE-FREESIZE)/1000000 "使用量(M)"
+from
+ DBA_TABLESPACES,
+(
+ select
+  V$TABLESPACE.NAME TNAME1,
+  sum(BYTES) FSIZE
+ from V$TABLESPACE,V$DATAFILE
+ where
+  V$TABLESPACE.TS# = V$DATAFILE.TS#
+ group by V$TABLESPACE.NAME
+) TSIZE,
+(
+ select
+  TABLESPACE_NAME AS TNAME2,
+  sum(BYTES) AS FREESIZE
+ from DBA_FREE_SPACE
+ group by TABLESPACE_NAME
+) TFREE
+where
+ TABLESPACE_NAME = TNAME1 and
+ TABLESPACE_NAME = TNAME2;
+ 
+ -- Get Lock
+SELECT SID,TYPE,LMODE,REQUEST,CTIME FROM V$LOCK WHERE TYPE IN ('TX','TM'); 
+
+--ロックをかけているユーザーとプログラムを特定するSQL文
+SELECT SADDR,SID,SERIAL#,USERNAME,PROGRAM FROM V$SESSION WHERE SID = ANY(SELECT SID FROM V$LOCK WHERE TYPE IN ('TX','TM'));
+
+-- find history static info and # of row
+WITH TableList AS
+  (SELECT object_id, 
+          OWNER,
+          object_name
+     FROM dba_objects
+    WHERE object_type='TABLE'
+      AND object_name  = UPPER(:TNAME)  ) ,
+  HistTableInfo AS
+  (SELECT TableList.OWNER,
+          OBJECT_NAME                         AS TABLE_NAME,
+          TO_CHAR(ANALYZETIME,'YYYY-MM-DD HH24:MI') AS AnalyzeTime,
+          OTH.ROWCNT
+     FROM SYS.WRI$_OPTSTAT_TAB_HISTORY OTH,
+          TableList
+    WHERE OTH.OBJ# = TableList.OBJECT_ID  ),
+  CurrTableInfo AS
+  (SELECT TableList.OWNER, 
+          TABLE_NAME,
+          TO_CHAR(LAST_ANALYZED,'YYYY-MM-DD HH24:MI') AS AnalyzeTime,
+          num_rows                                    AS ROWCNT
+     FROM DBA_TABLES,
+          TableList
+    WHERE DBA_TABLES.TABLE_NAME = TableList.object_name
+      AND DBA_TABLES.OWNER = TableList.owner)
+SELECT * FROM HistTableInfo
+UNION
+SELECT * FROM CurrTableInfo 
+ORDER BY 1,2,3;
+
+SELECT TABLE_NAME,STATTYPE_LOCKED FROM USER_TAB_STATISTICS WHERE object_type = 'TABLE' and STATTYPE_LOCKED is not null;
+ 
+ 
+ SELECT table_name, num_rows, last_analyzed, stattype_locked FROM USER_TAB_STATISTICS
+WHERE object_type = 'TABLE' and STATTYPE_LOCKED is not null;
+
+select client_name, status from dba_autotask_client;
+
+
+select * from dba_autotask_window_clients;
+
+select * from DBA_AUTOTASK_JOB_HISTORY;
+
+select * from DBA_SCHEDULER_WINDOWS;
+
+select Owner, table_name, num_rows, last_analyzed, TABLE_LOCK from dba_tables where Owner in ('SCPOMGR1') order by LAST_ANALYZED desc;
+
+select table_name,num_rows,last_analyzed,TABLE_LOCK from dba_tables
+where table_name
+in ('PLANARRIV','PLANORDER','PROCESSDFU','DFUMAP','PROCESSRECONCILE','SKUHIST','FCSTDRAFT','DFU','HIST',
+'FCST','HISTFCST','FITTEDHIST','FCSTPERFSTATIC','FCSTPERFSTATIC','DFUTOSKUFCST','PROCESSSKU','DEPDMDSTATIC');
+
+
+execute dbms_stats.gather_schema_stats('NWMGR', cascade=>true, estimate_percent=>30, degree=>dbms_stats.default_degree);
+
+execute dbms_stats.gather_schema_stats('EMAMGR', cascade=>true, estimate_percent=>30, degree=>dbms_stats.default_degree);
+
+execute dbms_stats.gather_schema_stats('WWFMGR', cascade=>true, estimate_percent=>30, degree=>dbms_stats.default_degree);
+
+
+SELECT *
+  FROM dba_objects
+ WHERE object_name like '%20%'
+ and object_type = 'TABLE'
+ order by created desc;
+ 
+ DROP TABLE HIST_BACKUP20200901 CASCADE CONSTRAINTS;
+ 
+ -- SKU_20SEP30
+ 
+ -- DFU_20201022
+ 
+ -- HIST_20200901 DFUVIEW_BACKUP20200901, HIST_BACKUP20200901
+ 
+ -- find analyze time
+ WITH TableList AS
+  (SELECT object_id,
+          OWNER,
+          object_name
+     FROM dba_objects
+    WHERE object_type='TABLE'
+      AND object_name  = 'HIST_20200905'  ) ,
+  HistTableInfo AS
+  (SELECT TableList.OWNER,
+          OBJECT_NAME                         AS TABLE_NAME,
+          TO_CHAR(ANALYZETIME,'YYYY-MM-DD HH24:MI') AS AnalyzeTime,
+          OTH.ROWCNT
+     FROM SYS.WRI$_OPTSTAT_TAB_HISTORY OTH,
+          TableList
+    WHERE OTH.OBJ# = TableList.OBJECT_ID  ),
+  CurrTableInfo AS
+  (SELECT TableList.OWNER,
+          TABLE_NAME,
+          TO_CHAR(LAST_ANALYZED,'YYYY-MM-DD HH24:MI') AS AnalyzeTime,
+          num_rows                                    AS ROWCNT
+     FROM DBA_TABLES,
+          TableList
+    WHERE DBA_TABLES.TABLE_NAME = TableList.object_name
+      AND DBA_TABLES.OWNER = TableList.owner)
+SELECT * FROM HistTableInfo
+UNION
+SELECT * FROM CurrTableInfo;
+
+
+
+select table_name from dba_tables where table_name like '%20%';
+
+
+select count(*) from PRODUCT_20SEP30;
+
+DROP TABLE PRODUCT_20SEP30 CASCADE CONSTRAINT PURGE;
+
+DROP TABLE DFUVIEW_BACKUP20200905 CASCADE CONSTRAINT PURGE;
+
+DROP TABLE DFUVIEW_BACKUP20200907 CASCADE CONSTRAINT PURGE;
+
+
+-- find table column name
+SELECT table_name, column_name, data_type, data_length
+FROM USER_TAB_COLUMNS
+WHERE column_name like '%MAIL%'
+
+
+SELECT table_name, column_name, data_type, data_length
+FROM WWFMGR.USER_TAB_COLUMNS
+WHERE column_name like '%MAIL%'
+
+select * from PROMOFACTSHEET;
+
+
+SELECT created
+  FROM dba_objects
+ WHERE object_name = 'HIST_20200905_2'
+   --AND owner = <<owner of the table>>
+   AND object_type = 'TABLE';
+
+drop table HIST_20200905_2;
+
+-- find child table
+SELECT DISTINCT C.TABLE_NAME CHILD_TABLENAME
+FROM (SELECT A.CONSTRAINT_NAME,
+A.CONSTRAINT_TYPE,
+A.TABLE_NAME,
+B.COLUMN_NAME,
+A.R_CONSTRAINT_NAME,
+B.POSITION
+FROM USER_CONSTRAINTS A, USER_CONS_COLUMNS B
+WHERE B.CONSTRAINT_NAME = A.CONSTRAINT_NAME
+AND A.CONSTRAINT_TYPE = 'R') C,
+USER_CONS_COLUMNS D
+WHERE D.CONSTRAINT_NAME = C.R_CONSTRAINT_NAME
+AND D.TABLE_NAME = 'DFUVIEW'
+AND D.POSITION = C.POSITION
+order by CHILD_TABLENAME desc;
+
+
+select * from item where item like '4549414083132%';
+
+select max(startdate),min(startdate) from hist where dmdunit like '4549414083132%'
+
+select distinct dmdunit, loc, sum(qty) from hist where dmdunit like '4549414083132%'
+group by dmdunit, loc;
